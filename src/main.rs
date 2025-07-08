@@ -1,3 +1,5 @@
+mod trie;
+
 use axum::{
     Router,
     body::Body,
@@ -9,12 +11,12 @@ use axum::{
     routing::get,
 };
 use futures::StreamExt;
-use radix_trie::{Trie, TrieCommon};
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use trie::Trie;
 
 struct AppState {
-    files: RwLock<Trie<String, Arc<RwLock<Vec<u8>>>>>,
+    files: RwLock<Trie>,
 }
 
 impl AppState {
@@ -29,6 +31,7 @@ async fn handle_index(extract::State(state): extract::State<Arc<AppState>>) -> H
     return Html(
         files
             .keys()
+            .iter()
             .map(|s| format!(r#"<a href="{0}">{0}</a><br>"#, s))
             .collect::<Vec<String>>()
             .join("\n"),
@@ -60,7 +63,7 @@ async fn handle_put(
     let file = Arc::new(RwLock::new(Vec::new()));
 
     let mut files_guard = state.files.write().await;
-    let overwritten = files_guard.insert(path.clone(), file.clone()).is_some();
+    let overwritten = files_guard.insert(&path, file.clone()).is_some();
     drop(files_guard); // Release write lock on the Trie
     println!("PUT {} trie lock released", path);
 
@@ -131,35 +134,20 @@ async fn handle_player() -> Html<&'static str> {
 
 async fn handle_list(state: Arc<AppState>, request: extract::Request) -> Response {
     let uri = request.uri();
-    let path = uri.path();
+    let path = uri.path().trim_start_matches('/').to_string();
+    println!("LIST {}", path);
     let files = state.files.read().await;
-    if let Some(subtrie) = files.subtrie(path) {
-        println!("LIST [200] {}", path);
-        let body = Body::from(
-            subtrie
-                .keys()
-                .map(|s| s.as_str())
-                .collect::<Vec<&str>>()
-                .join("\n"),
-        );
-        return Response::builder()
-            .status(StatusCode::OK)
-            .body(Body::from(body))
-            .unwrap();
-    } else {
-        println!("LIST [404] {}", path);
-        let body = Body::from(
-            files
-                .keys()
-                .map(|s| s.as_str())
-                .collect::<Vec<&str>>()
-                .join("\n"),
-        );
-        return Response::builder()
-            .status(StatusCode::NOT_FOUND)
-            .body(Body::from(body))
-            .unwrap();
-    }
+    let keys = files
+        .keys_by_prefix(&path)
+        .iter()
+        .map(|s| s.as_str())
+        .collect::<Vec<&str>>()
+        .join("\n");
+    let body = Body::from(keys);
+    return Response::builder()
+        .status(StatusCode::OK)
+        .body(Body::from(body))
+        .unwrap();
 }
 
 async fn custom_method_middleware(
