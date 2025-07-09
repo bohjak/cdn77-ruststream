@@ -1,25 +1,20 @@
-use std::sync::Arc;
-use tokio::sync::RwLock;
-
-type TrieValue = Arc<RwLock<Vec<u8>>>;
-
 #[derive(Debug, Default)]
 struct TrieNode {
     key: u8,
     next_idx: usize,
     child_first_idx: usize,
     child_last_idx: usize,
-    data_idx: Option<usize>,
+    data_idx: usize,
 }
 
-pub struct Trie {
-    values: Vec<TrieValue>,
+pub struct Trie<TrieValue> {
+    values: Vec<Option<TrieValue>>,
     values_free_list: Vec<usize>,
     nodes: Vec<TrieNode>,
     nodes_free_list: Vec<usize>,
 }
 
-impl Trie {
+impl<TrieValue: Clone> Trie<TrieValue> {
     pub fn new() -> Self {
         let mut trie = Self {
             values: Vec::new(),
@@ -27,7 +22,10 @@ impl Trie {
             nodes: Vec::new(),
             nodes_free_list: Vec::new(),
         };
+        // Push root node
         trie.nodes.push(TrieNode::default());
+        // Push default value
+        trie.values.push(None);
         return trie;
     }
 
@@ -58,13 +56,8 @@ impl Trie {
             if let Some(free_idx) = self.nodes_free_list.pop() {
                 node_idx = free_idx;
             }
-            let node = TrieNode {
-                key: ch,
-                child_last_idx: 0,
-                next_idx: 0,
-                child_first_idx: 0,
-                data_idx: None,
-            };
+            let mut node = TrieNode::default();
+            node.key = ch;
             if node_idx < self.nodes.len() {
                 self.nodes[node_idx] = node;
             } else {
@@ -83,20 +76,21 @@ impl Trie {
             result = self._insert(key, value, depth + 1, node_idx);
         } else {
             let node = &mut self.nodes[node_idx];
-            if let Some(data_idx) = node.data_idx {
-                result = Some(self.values[data_idx].clone());
-                self.values[data_idx] = value;
+            let mut data_idx = node.data_idx;
+            if data_idx > 0 {
+                result = self.values[data_idx].clone();
+                self.values[data_idx] = Some(value);
             } else {
-                let mut data_idx = self.values.len();
+                data_idx = self.values.len();
                 if let Some(free_idx) = self.values_free_list.pop() {
                     data_idx = free_idx;
                 }
                 if data_idx < self.values.len() {
-                    self.values[data_idx] = value;
+                    self.values[data_idx] = Some(value);
                 } else {
-                    self.values.push(value);
+                    self.values.push(Some(value));
                 }
-                node.data_idx = Some(data_idx);
+                node.data_idx = data_idx;
             };
         }
 
@@ -130,12 +124,8 @@ impl Trie {
 
     pub fn get(self: &Self, key: &String) -> Option<TrieValue> {
         let (idx, _) = self._get_idx(key.as_bytes(), 0, 0);
-        let mut result = None;
-        if idx > 0 {
-            if let Some(data_idx) = self.nodes[idx].data_idx {
-                result = Some(self.values[data_idx].clone());
-            }
-        }
+        let data_idx = self.nodes[idx].data_idx;
+        let result = self.values[data_idx].clone();
         return result;
     }
 
@@ -155,15 +145,17 @@ impl Trie {
             if depth < key.len() - 1 {
                 result = self._remove(key, depth + 1, node_idx);
             } else {
-                // Mark value slot as free and remove its index
-                if let Some(data_idx) = self.nodes[node_idx].data_idx {
+                let data_idx = self.nodes[node_idx].data_idx;
+                if data_idx > 0 {
+                    result = self.values[data_idx].clone();
+                    self.values[data_idx] = None;
                     self.values_free_list.push(data_idx);
                 }
-                self.nodes[node_idx].data_idx = None;
+                self.nodes[node_idx].data_idx = 0;
             }
 
             // Cleanup on the way up
-            if self.nodes[node_idx].data_idx.is_some() {
+            if self.nodes[node_idx].data_idx > 0 {
                 // Never remove
             } else if self.nodes[node_idx].child_first_idx > 0 {
                 // Never remove
@@ -236,7 +228,7 @@ impl Trie {
         let mut prefix_buffer = Vec::new();
         let (prefix_root_idx, depth) = self._get_idx(prefix.as_bytes(), 0, 0);
         if prefix_root_idx > 0 {
-            if self.nodes[prefix_root_idx].data_idx.is_some() {
+            if self.nodes[prefix_root_idx].data_idx > 0 {
                 result.push(prefix.clone());
             }
             prefix_buffer.extend(prefix.as_bytes());

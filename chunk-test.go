@@ -32,11 +32,11 @@ func send(path string) error {
             select {
                 case <-ticker.C: {
                     msg := fmt.Sprintf("[%d] %s", counter, time.Now().Format("15:04:05"))
-                    fmt.Println("Sent:", msg)
+                    // fmt.Println("Sent:", msg)
                     chunk := fmt.Sprintf("%x\r\n%s\r\n", len(msg), msg)
                     conn.Write([]byte(chunk))
                     counter += 1
-                    if counter > 100 {
+                    if counter > 10 {
                         done = true
                     }
                 }
@@ -71,7 +71,7 @@ func read(path string) error {
         return err
     }
 
-    fmt.Printf("Received: %s\n", buffer[:n])
+    fmt.Println("Received:\n\n%s\n---\n", buffer[:n])
 
     return nil
 }
@@ -102,35 +102,46 @@ func readChunked(path string) error {
 
     headers := fmt.Sprintf("GET %s HTTP/1.1\r\n", path)
     headers += "Host: localhost:3000\r\n"
-    headers += "Transfer-Encoding: chunked\r\n"
     headers += "\r\n"
     conn.Write([]byte(headers))
 
     buffer := make([]byte, 1024)
 
-    for {
+    done := false
+    for done != true {
         n, err := conn.Read(buffer)
         if err != nil {
             return err
         }
-
-        fmt.Printf("Received: %s\n", buffer[:n])
+        fmt.Printf("Received:\n\n%s\n---\n\n", string(buffer[:n]))
+        if buffer[0] == 0 {
+            done = true
+        }
     }
+
+    return nil
 }
 
 func main() {
     var wg sync.WaitGroup
     path := "/test/concurrence"
-    wg.Add(2)
-    go func() {
-        defer wg.Done()
-        send(path)
-    }()
-    go func() {
-        defer wg.Done()
-        readLoop(path)
-    }()
-    // time.Sleep(7 * time.Second)
-    // readChunked(path)
+    {
+        wg.Add(1)
+        go func() {
+            defer wg.Done()
+            send(path)
+        }()
+    }
+    /* {
+        wg.Add(1)
+        go func() {
+            defer wg.Done()
+            readLoop(path)
+        }()
+    } */
+    {
+        time.Sleep(1 * time.Second)
+        readChunked(path)
+    }
     wg.Wait()
 }
