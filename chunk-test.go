@@ -3,8 +3,9 @@ package main
 import (
 	"fmt"
 	"net"
+	"strings"
+	"sync"
 	"time"
-    "sync"
 )
 
 func send(path string) error {
@@ -42,10 +43,11 @@ func send(path string) error {
                 }
             }
         }
+        fmt.Println("End of transmission")
         conn.Write([]byte("0\r\n\r\n"))
-        wg.Done()
         ticker.Stop()
         conn.Close()
+        wg.Done()
     }()
     wg.Wait()
 
@@ -114,10 +116,12 @@ func readChunked(path string) error {
             return err
         }
         fmt.Printf("Received:\n\n%s\n---\n\n", string(buffer[:n]))
-        if buffer[0] == 0 {
+        if strings.HasSuffix(string(buffer), "0\r\n\r\n") {
             done = true
         }
     }
+
+    fmt.Println("Done receiving")
 
     return nil
 }
@@ -143,5 +147,6 @@ func main() {
         time.Sleep(1 * time.Second)
         readChunked(path)
     }
+
     wg.Wait()
 }

@@ -1,7 +1,8 @@
 mod trie;
 
+use async_stream::stream;
 use axum::{
-    Router,
+    Error, Router,
     body::{Body, Bytes},
     extract,
     http::StatusCode,
@@ -10,23 +11,23 @@ use axum::{
     routing::get,
 };
 use futures::StreamExt;
-use std::sync::Arc;
-use tokio::sync::{RwLock, broadcast};
-use tokio_stream::wrappers::BroadcastStream;
+use std::{cmp::min, sync::Arc, time::Duration};
+use tokio::{sync::RwLock, time::sleep};
 use trie::Trie;
 
-static BROADCAST_ENABLED: bool = false;
+struct File {
+    data: Vec<u8>,
+    done: bool,
+}
 
 struct AppState {
-    files: RwLock<Trie<Arc<RwLock<Vec<u8>>>>>,
-    broadcasts: RwLock<Trie<Arc<broadcast::Sender<Bytes>>>>,
+    files: RwLock<Trie<Arc<RwLock<File>>>>,
 }
 
 impl AppState {
     fn new() -> Arc<Self> {
         let files = RwLock::new(Trie::new());
-        let broadcasts = RwLock::new(Trie::new());
-        return Arc::new(Self { files, broadcasts });
+        return Arc::new(Self { files });
     }
 }
 
@@ -46,24 +47,40 @@ async fn handle_get(
     extract::State(state): extract::State<Arc<AppState>>,
     extract::Path(path): extract::Path<String>,
 ) -> Result<Response, StatusCode> {
-    let broadcasts_guard = state.broadcasts.read().await;
-    if let Some(sender) = broadcasts_guard.get(&path) {
-        let receiver = sender.subscribe();
-        drop(broadcasts_guard);
-        let stream = BroadcastStream::new(receiver);
+    let files_guard = state.files.read().await;
+    if let Some(file) = files_guard.get(&path) {
+        let stream = stream! {
+            // TODO(Jakub): adjust;
+            //              ffmpeg seems to be sending chunks in the 4KB to 8KB range
+            let max_chunk_size = 2 << 16;
+            let mut bytes_sent = 0;
+            let mut miss_counter = 0;
+            loop {
+                let file_guard = file.read().await;
+                let bytes_to_send = min(file_guard.data.len() - bytes_sent, max_chunk_size);
+                let chunk = Bytes::copy_from_slice(&file_guard.data[bytes_sent..(bytes_sent + bytes_to_send)]);
+                bytes_sent += bytes_to_send;
+                yield Ok::<_, Error>(chunk);
+                if bytes_to_send == 0 {
+                    // This is to handle the scenario where we finish streaming
+                    // the file out before we receive all of it.
+                    // For some reason, incomming streams are not being reliably terminated.
+                    if file_guard.done || miss_counter > 10 {
+                        break;
+                    } else {
+                        miss_counter += 1;
+                        sleep(Duration::from_millis(10)).await;
+                    }
+                } else {
+                    miss_counter = 0;
+                }
+            }
+        };
         let body = Body::from_stream(stream);
-        Ok(Response::new(body))
+        return Ok(Response::new(body));
     } else {
-        let files_guard = state.files.read().await;
-        if let Some(file) = files_guard.get(&path) {
-            println!("GET [200] {}", path);
-            let file_guard = file.read().await;
-            let body = Body::from(file_guard.clone());
-            return Ok(Response::new(body));
-        } else {
-            println!("GET [404] {}", path);
-            return Err(StatusCode::NOT_FOUND);
-        }
+        println!("GET [404] {}", path);
+        return Err(StatusCode::NOT_FOUND);
     }
 }
 
@@ -75,15 +92,10 @@ async fn handle_put(
 ) -> StatusCode {
     println!("PUT {}", path);
 
-    let (sender, _receiver) = broadcast::channel::<Bytes>(1024);
-    let sender_ptr = Arc::new(sender);
-    if BROADCAST_ENABLED {
-        let mut broadcasts_guard = state.broadcasts.write().await;
-        broadcasts_guard.insert(&path, sender_ptr.clone());
-        drop(broadcasts_guard);
-    }
-
-    let file = Arc::new(RwLock::new(Vec::new()));
+    let file = Arc::new(RwLock::new(File {
+        done: false,
+        data: Vec::new(),
+    }));
     let mut files_guard = state.files.write().await;
     let overwritten = files_guard.insert(&path, file.clone()).is_some();
     drop(files_guard);
@@ -94,12 +106,7 @@ async fn handle_put(
         match chunk {
             Ok(bytes) => {
                 let mut file_guard = file.write().await;
-                file_guard.extend_from_slice(&bytes);
-                if BROADCAST_ENABLED {
-                    if let Err(e) = sender_ptr.send(bytes) {
-                        eprintln!("Error broadcasting new chunk: {}", e);
-                    }
-                }
+                file_guard.data.extend_from_slice(&bytes);
             }
             Err(e) => {
                 eprintln!("Error reading chunk: {}", e);
@@ -108,9 +115,8 @@ async fn handle_put(
         }
     }
     println!("PUT {} streaming end", path);
-
-    let mut broadcasts_guard = state.broadcasts.write().await;
-    broadcasts_guard.remove(&path);
+    let mut file_guard = file.write().await;
+    file_guard.done = true;
 
     if overwritten {
         return StatusCode::OK;
@@ -151,9 +157,8 @@ async fn handle_player() -> Html<&'static str> {
         <script src="https://cdn.dashjs.org/latest/modern/umd/dash.all.min.js"></script>
         <script>
             (function () {
-                // var url = "https://livesim2.dashif.org/livesim2/testpic_2s/Manifest.mpd";
-                var url = "/foo/bar/main.mpd"
-                var player = dashjs.MediaPlayer().create();
+                let url = window.location.hash.substr(1) || "/stream/1/main.mpd";
+                let player = dashjs.MediaPlayer().create();
                 player.initialize(document.querySelector("#videoPlayer"), url, true);
             })();
         </script>

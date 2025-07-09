@@ -3,10 +3,9 @@
 set -e
 
 BASE='http://127.0.0.1:3000'
-PATH='foo/bar/main.mpd'
-FILE='test.mp4'
 
 function encode {
+    local path="$1"
 	/usr/bin/ffmpeg \
 		-loglevel verbose \
 		\
@@ -44,11 +43,18 @@ function encode {
 		-timeout 0.5 \
 		-write_prft 1 \
 		\
-		"$BASE/$PATH"
+		"$BASE/$path"
 }
 
 function main {
-	encode
+    local num_of_streams="${1:-1}"
+    if [ "$num_of_streams" == 1 ]; then
+        encode "stream/1/main.mpd"
+    else
+        for i in $(seq 1 "$num_of_streams"); do
+            encode "stream/$i/main.mpd" &
+        done
+    fi
 }
 
 main "$@"
