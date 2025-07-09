@@ -1,5 +1,7 @@
 # Chunked Store
 
+![reference player example](./assets/Screenshot_20250709_172909.png)
+
 ## Features
 
 Trie-backed in-memory file storage.
