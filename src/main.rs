@@ -50,9 +50,8 @@ async fn handle_get(
     let files_guard = state.files.read().await;
     if let Some(file) = files_guard.get(&path) {
         let stream = stream! {
-            // TODO(Jakub): adjust;
-            //              ffmpeg seems to be sending chunks in the 4KB to 8KB range
-            let max_chunk_size = 2 << 16;
+            // ffmpeg seems to be sending chunks in the 4KB to 8KB range
+            let max_chunk_size = 2 << 14;
             let mut bytes_sent = 0;
             let mut miss_counter = 0;
             loop {

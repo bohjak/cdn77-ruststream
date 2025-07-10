@@ -7,7 +7,4 @@ edition = "2024"
 async-stream = "0.3.6"
 axum = { version = "0.8.4", features = ["macros"] }
 futures = "0.3.31"
-hyper = "1.6.0"
-radix_trie = "0.2.1"
 tokio = { version = "1.46.1", features = ["full"] }
-tokio-stream = { version = "0.1.17", features = ["sync"] }
